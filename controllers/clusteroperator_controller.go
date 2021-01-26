@@ -51,6 +51,7 @@ type CloudOperatorReconciler struct {
 	client.Client
 	platform.PlatformOwner
 	Scheme *runtime.Scheme
+	cache  NamespacedCache
 }
 
 // +kubebuilder:rbac:groups=config.openshift.io,resources=clusteroperators,verbs=get;list;watch;create;update;patch;delete
@@ -78,6 +79,10 @@ func (r *CloudOperatorReconciler) sync(ctx context.Context, req ctrl.Request) er
 	}
 
 	for _, resource := range resources {
+		if err := r.cache.Watch(ctx, resource); err != nil {
+			return err
+		}
+
 		ctrl.SetControllerReference(owner, resource, r.Scheme)
 
 		if err = ApplyServerSide(ctx, r.Client, clusterOperatorName, resource); err != nil {
@@ -176,12 +181,33 @@ func (r *CloudOperatorReconciler) syncStatus(ctx context.Context, co *configv1.C
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CloudOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	cache, err := NewNamespacedCache(CacheOptions{
+		Config: mgr.GetConfig(),
+		Mapper: mgr.GetRESTMapper(),
+		Scheme: mgr.GetScheme(),
+	})
+	if err != nil {
+		return err
+	}
+	r.cache = cache
+
+	queueOperator := func(_ client.Object) []ctrl.Request {
+		return []ctrl.Request{
+			{NamespacedName: client.ObjectKey{Name: clusterOperatorName}},
+		}
+	}
+
 	build := ctrl.NewControllerManagedBy(mgr).
 		For(r.Object()).
 		Watches(
 			&source.Kind{Type: &configv1.ClusterOperator{}},
 			handler.EnqueueRequestsFromMapFunc(r.Mapper()),
-			builder.WithPredicates(clusterOperatorPredicates()))
+			builder.WithPredicates(clusterOperatorPredicates()),
+		).
+		Watches(
+			&source.Channel{Source: cache.EventStream()},
+			handler.EnqueueRequestsFromMapFunc(handler.MapFunc(queueOperator)),
+		)
 
 	for _, resource := range cloud.OwnedResourcesGroup() {
 		build.Owns(resource, builder.OnlyMetadata)
