@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	configv1 "github.com/openshift/api/config/v1"
+	"github.com/openshift/cluster-cloud-controller-manager-operator/tmp/pkg/cloud"
 	"github.com/openshift/cluster-cloud-controller-manager-operator/tmp/pkg/platform"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -154,6 +155,10 @@ func (r *CloudOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&source.Kind{Type: &configv1.ClusterOperator{}},
 			handler.EnqueueRequestsFromMapFunc(r.Mapper()),
 			builder.WithPredicates(clusterOperatorPredicates()))
+
+	for _, resource := range cloud.OwnedResourcesGroup() {
+		build.Owns(resource, builder.OnlyMetadata)
+	}
 
 	return build.Complete(r)
 }
