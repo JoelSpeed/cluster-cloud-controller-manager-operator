@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	configv1 "github.com/openshift/api/config/v1"
+	"github.com/openshift/cluster-cloud-controller-manager-operator/tmp/pkg/platform"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,7 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/openshift/library-go/pkg/config/clusteroperator/v1helpers"
 )
@@ -45,6 +48,7 @@ var relatedObjects = []configv1.ObjectReference{}
 // CloudOperatorReconciler reconciles a ClusterOperator object
 type CloudOperatorReconciler struct {
 	client.Client
+	platform.PlatformOwner
 	Scheme *runtime.Scheme
 }
 
@@ -144,17 +148,26 @@ func (r *CloudOperatorReconciler) syncStatus(ctx context.Context, co *configv1.C
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CloudOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&configv1.ClusterOperator{}, builder.WithPredicates(predicate.Funcs{
-			CreateFunc:  func(e event.CreateEvent) bool { return clusterOperatorFilter(e.Object) },
-			UpdateFunc:  func(e event.UpdateEvent) bool { return clusterOperatorFilter(e.ObjectNew) },
-			GenericFunc: func(e event.GenericEvent) bool { return clusterOperatorFilter(e.Object) },
-			DeleteFunc:  func(e event.DeleteEvent) bool { return clusterOperatorFilter(e.Object) },
-		})).
-		Complete(r)
+	build := ctrl.NewControllerManagedBy(mgr).
+		For(r.Object()).
+		Watches(
+			&source.Kind{Type: &configv1.ClusterOperator{}},
+			handler.EnqueueRequestsFromMapFunc(r.Mapper()),
+			builder.WithPredicates(clusterOperatorPredicates()))
+
+	return build.Complete(r)
 }
 
-func clusterOperatorFilter(obj runtime.Object) bool {
-	clusterOperator, ok := obj.(*configv1.ClusterOperator)
-	return ok && clusterOperator.GetName() == clusterOperatorName
+func clusterOperatorPredicates() predicate.Funcs {
+	isClusterOperator := func(obj runtime.Object) bool {
+		clusterOperator, ok := obj.(*configv1.ClusterOperator)
+		return ok && clusterOperator.GetName() == clusterOperatorName
+	}
+
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return isClusterOperator(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return isClusterOperator(e.ObjectNew) },
+		GenericFunc: func(e event.GenericEvent) bool { return isClusterOperator(e.Object) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return isClusterOperator(e.Object) },
+	}
 }

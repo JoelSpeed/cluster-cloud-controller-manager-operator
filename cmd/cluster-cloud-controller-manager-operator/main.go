@@ -29,12 +29,14 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/cluster-cloud-controller-manager-operator/tmp/controllers"
+	"github.com/openshift/cluster-cloud-controller-manager-operator/tmp/pkg/platform"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -112,9 +114,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	platform := &platform.InfrastrucutreOwner{}
+
+	setupLog.Info("Waiting for platform objects")
+	if err = wait.PollImmediate(
+		20*time.Second,
+		2*time.Minute,
+		func() (bool, error) { return platform.Init(mgr.GetScheme()), nil },
+	); err != nil {
+		setupLog.Error(err, "Timed out waiting for %T platform objects", platform.Object())
+		os.Exit(1)
+	}
+
 	if err = (&controllers.CloudOperatorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		PlatformOwner: platform,
+		Scheme:        mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterOperator")
 		os.Exit(1)
