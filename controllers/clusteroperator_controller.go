@@ -59,12 +59,39 @@ type CloudOperatorReconciler struct {
 
 // Reconcile will process the cloud-controller-manager clusterOperator
 func (r *CloudOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if err := r.sync(ctx, req); err != nil {
+		klog.Errorf("Unable to sync operands: %s", err)
+	}
 
 	if err := r.statusAvailable(ctx); err != nil {
 		klog.Errorf("Unable to sync cluster operator status: %s", err)
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *CloudOperatorReconciler) sync(ctx context.Context, req ctrl.Request) error {
+	owner, resources, err := r.GetOwner(ctx, r.Client, req.NamespacedName)
+	if err != nil {
+		return err
+	}
+
+	for _, resource := range resources {
+		ctrl.SetControllerReference(owner, resource, r.Scheme)
+
+		if err = ApplyServerSide(ctx, r.Client, clusterOperatorName, resource); err != nil {
+			klog.Errorf("Unable to apply object: %+v", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func ApplyServerSide(ctx context.Context, c client.Client, owner client.FieldOwner, obj client.Object, opts ...client.PatchOption) error {
+	opts = append([]client.PatchOption{client.ForceOwnership, owner}, opts...)
+	return c.Patch(ctx, obj, client.Apply, opts...)
 }
 
 // statusAvailable sets the Available condition to True, with the given reason
