@@ -50,8 +50,8 @@ var relatedObjects = []configv1.ObjectReference{}
 type CloudOperatorReconciler struct {
 	client.Client
 	platform.PlatformOwner
-	Scheme *runtime.Scheme
-	cache  NamespacedCache
+	Scheme  *runtime.Scheme
+	watcher ObjectWatcher
 }
 
 // +kubebuilder:rbac:groups=config.openshift.io,resources=clusteroperators,verbs=get;list;watch;create;update;patch;delete
@@ -79,7 +79,7 @@ func (r *CloudOperatorReconciler) sync(ctx context.Context, req ctrl.Request) er
 	}
 
 	for _, resource := range resources {
-		if err := r.cache.Watch(ctx, resource); err != nil {
+		if err := r.watcher.Watch(ctx, resource); err != nil {
 			return err
 		}
 
@@ -181,15 +181,14 @@ func (r *CloudOperatorReconciler) syncStatus(ctx context.Context, co *configv1.C
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CloudOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	cache, err := NewNamespacedCache(CacheOptions{
-		Config: mgr.GetConfig(),
-		Mapper: mgr.GetRESTMapper(),
+	watcher, err := NewObjectWatcher(WatcherOptions{
+		Cache:  mgr.GetCache(),
 		Scheme: mgr.GetScheme(),
 	})
 	if err != nil {
 		return err
 	}
-	r.cache = cache
+	r.watcher = watcher
 
 	queueOperator := func(_ client.Object) []ctrl.Request {
 		return []ctrl.Request{
@@ -205,7 +204,7 @@ func (r *CloudOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(clusterOperatorPredicates()),
 		).
 		Watches(
-			&source.Channel{Source: cache.EventStream()},
+			&source.Channel{Source: watcher.EventStream()},
 			handler.EnqueueRequestsFromMapFunc(handler.MapFunc(queueOperator)),
 		)
 
